@@ -1,0 +1,44 @@
+# ─── Environment ──────────────────────────────────────────────────────────
+.env
+
+# ─── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ─── Flask / Runtime ──────────────────────────────────────────────────────
+instance/
+backend/instance/
+backend/photos/
+photos/
+
+# ─── InsightFace Models ───────────────────────────────────────────────────
+models/
+backend/models/
+~/.insightface/
+
+# ─── Node / Frontend ──────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# ─── OS / Editor ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.log
+
+# ─── Test / Coverage ──────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+
