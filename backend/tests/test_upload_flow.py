@@ -143,11 +143,43 @@ def test_upload_wrong_pose_angles(client, app):
         mock_cv2.cvtColor.return_value = MagicMock()
         mock_cv2.Laplacian.return_value.var.return_value = 150.0
         mock_cv2.CV_64F = 6
-        # Extreme in-plane roll (head tilted sideways past 35 degrees)
-        mock_analyse.return_value = [_make_face_result(yaw=0.0, pitch=0.0, roll=50.0)]
+        # Extreme in-plane roll (head tilted sideways past 50 degrees)
+        mock_analyse.return_value = [_make_face_result(yaw=0.0, pitch=0.0, roll=55.0)]
         resp = client.post("/api/photos/upload", data=data, content_type="multipart/form-data")
     assert resp.status_code == 422
     assert resp.get_json()["code"] == "WRONG_POSE"
+
+
+def test_upload_same_front_angle_is_accepted_for_second_front_photo(client, app):
+    """The second front photo does not require an artificial angle change."""
+    roll = "sameangle001"
+    _setup_logged_in(client, app, roll)
+    shared_emb = np.zeros(512, dtype=np.float32)
+    shared_emb[0] = 1.0
+
+    def upload(pose, image_bytes):
+        data = {"pose": pose, "image": (io.BytesIO(image_bytes), f"{pose}.jpg")}
+        with patch("app.services.photo_service.cv2") as mock_cv2, \
+             patch("app.services.photo_service.analyse") as mock_analyse:
+            mock_cv2.imdecode.return_value = MagicMock(shape=(480, 640, 3))
+            mock_cv2.COLOR_BGR2GRAY = 6
+            mock_cv2.cvtColor.return_value = MagicMock()
+            mock_cv2.Laplacian.return_value.var.return_value = 150.0
+            mock_cv2.CV_64F = 6
+            mock_analyse.return_value = [
+                _make_face_result(yaw=0.0, pitch=0.0, embedding=shared_emb)
+            ]
+            return client.post(
+                "/api/photos/upload",
+                data=data,
+                content_type="multipart/form-data",
+            )
+
+    first = upload("PHOTO_1", make_minimal_jpeg())
+    assert first.status_code == 201
+
+    second = upload("PHOTO_2", make_minimal_jpeg() + b"new-frame")
+    assert second.status_code == 201
 
 
 def test_upload_different_person(client, app):
@@ -174,8 +206,8 @@ def test_upload_different_person(client, app):
         resp1 = client.post("/api/photos/upload", data=data1, content_type="multipart/form-data")
         assert resp1.status_code == 201
 
-    # Second photo: LEFT, but different person (different bytes to bypass sha256 duplicate check)
-    data2 = {"pose": "LEFT", "image": (io.BytesIO(make_minimal_jpeg() + b"photo2_bytes"), "p2.jpg")}
+    # Second photo has a valid front angle but belongs to another person.
+    data2 = {"pose": "PHOTO_2", "image": (io.BytesIO(make_minimal_jpeg() + b"photo2_bytes"), "p2.jpg")}
     with patch("app.services.photo_service.cv2") as mock_cv2, \
          patch("app.services.photo_service.analyse") as mock_analyse:
         mock_cv2.imdecode.return_value = MagicMock(shape=(480, 640, 3))
@@ -183,7 +215,7 @@ def test_upload_different_person(client, app):
         mock_cv2.cvtColor.return_value = MagicMock()
         mock_cv2.Laplacian.return_value.var.return_value = 150.0
         mock_cv2.CV_64F = 6
-        mock_analyse.return_value = [_make_face_result(yaw=30.0, pitch=0.0, embedding=diff_emb)]
+        mock_analyse.return_value = [_make_face_result(yaw=0.0, pitch=0.0, embedding=diff_emb)]
         resp2 = client.post("/api/photos/upload", data=data2, content_type="multipart/form-data")
     assert resp2.status_code == 422
     assert resp2.get_json()["code"] == "DIFFERENT_PERSON"
@@ -202,10 +234,10 @@ def test_four_photos_completion_flow(client, app):
         shared_emb[0] = 1.0
 
         poses = [
-            ("FRONT", 0.0, 0.0),
-            ("LEFT", 30.0, 0.0),
-            ("RIGHT", -30.0, 0.0),
-            ("UP", 0.0, 20.0),
+            ("PHOTO_1", 0.0, 0.0),
+            ("PHOTO_2", 0.0, 0.0),
+            ("PHOTO_3", 35.0, 5.0),
+            ("PHOTO_4", -35.0, -5.0),
         ]
 
         for idx, (pose_name, yaw, pitch) in enumerate(poses, start=1):
@@ -266,7 +298,7 @@ def test_resume_at_correct_pose(client, app):
         import numpy as np
 
         embedding = np.zeros(512, dtype=np.float32).tobytes()
-        for i, pose_name in enumerate(["FRONT", "LEFT"], start=1):
+        for i, pose_name in enumerate(["PHOTO_1", "PHOTO_2"], start=1):
             p = Photo(
                 roll=roll,
                 photo_no=i,

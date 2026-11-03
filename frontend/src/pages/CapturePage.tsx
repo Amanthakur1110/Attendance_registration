@@ -6,10 +6,10 @@ import { ApiError } from '../api/client';
 import { Alert } from '../components/Alert';
 import { CameraView, CameraViewHandle } from '../components/CameraView';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
-import { POSES, checkPose } from '../config/poses';
+import { POSES } from '../config/poses';
 import type { PoseConfig } from '../types';
 
-type CaptureState = 'idle' | 'holding' | 'uploading' | 'accepted' | 'rejected';
+type CaptureState = 'idle' | 'holding' | 'uploading' | 'accepted';
 
 // Simple web audio synthesizer click/chime for Face ID feedback
 function playAudioBeep(success = false) {
@@ -48,10 +48,6 @@ function getGuidance(
   facesDetected: number,
   faceRect: { x: number; y: number; w: number; h: number } | null,
   videoWidth: number,
-  currentPose: PoseConfig,
-  yaw: number,
-  pitch: number,
-  roll: number,
   landmarkerStatus: string
 ): { text: string; isGood: boolean } {
   if (landmarkerStatus === 'loading') {
@@ -76,12 +72,7 @@ function getGuidance(
     }
   }
 
-  const hint = checkPose(currentPose, yaw, pitch, roll);
-  if (hint) {
-    return { text: hint, isGood: false };
-  }
-
-  return { text: 'Looking good, hold still…', isGood: true };
+  return { text: 'Face found — hold still for automatic capture', isGood: true };
 }
 
 export default function CapturePage() {
@@ -104,6 +95,7 @@ export default function CapturePage() {
   const holdStartTimeRef = useRef<number | null>(null);
   const animFrameRef = useRef<number>(0);
   const isCapturingRef = useRef(false);
+  const retryAfterRef = useRef(0);
 
   const handleCameraReady = useCallback((el: HTMLVideoElement) => {
     videoRef.current = el;
@@ -149,16 +141,11 @@ export default function CapturePage() {
     videoRef,
     cameraReady && poseStatusReady && (captureState === 'idle' || captureState === 'holding')
   );
-
   const videoWidth = videoRef.current?.videoWidth ?? 640;
   const { text: guidanceText, isGood } = getGuidance(
     landmarkerResult.facesDetected,
     landmarkerResult.faceRect,
     videoWidth,
-    currentPose,
-    landmarkerResult.yaw,
-    landmarkerResult.pitch,
-    landmarkerResult.roll,
     landmarkerStatus
   );
 
@@ -199,33 +186,46 @@ export default function CapturePage() {
       }, 750);
     } catch (err: unknown) {
       isCapturingRef.current = false;
-      setCaptureState('rejected');
+      retryAfterRef.current = performance.now() + 1200;
+      setCaptureState('idle');
       setHoldProgress(0);
       if (err instanceof ApiError) {
-        setServerFeedback(err.message);
+        setServerFeedback(
+          `${err.message} Adjust your face angle slightly; capture will retry automatically.`
+        );
       } else {
-        setServerFeedback('Photo verification failed. Please try again.');
+        setServerFeedback(
+          'Photo verification failed. Adjust your position; capture will retry automatically.'
+        );
       }
     }
   }, [currentPose.name, navigate]);
 
   // Smooth Apple Face ID auto-capture progress: holds for 600ms when face is in circle
   useEffect(() => {
-    if (captureState === 'uploading' || captureState === 'accepted') {
+    if (captureState !== 'idle' && captureState !== 'holding') {
       return;
     }
 
-    const HOLD_DURATION_MS = 600; // 600ms steady hold triggers capture
+    const HOLD_DURATION_MS = 800;
 
     const updateHoldProgress = () => {
-      if (!isGood || isCapturingRef.current) {
+      if (!isGood) {
         holdStartTimeRef.current = null;
-        setHoldProgress((prev) => Math.max(0, prev - 0.2));
+        setHoldProgress(0);
         if (captureState === 'holding') setCaptureState('idle');
+        animFrameRef.current = requestAnimationFrame(updateHoldProgress);
         return;
       }
 
       const now = performance.now();
+      if (now < retryAfterRef.current || isCapturingRef.current) {
+        holdStartTimeRef.current = null;
+        setHoldProgress(0);
+        animFrameRef.current = requestAnimationFrame(updateHoldProgress);
+        return;
+      }
+
       if (!holdStartTimeRef.current) {
         holdStartTimeRef.current = now;
         setCaptureState('holding');
@@ -247,20 +247,14 @@ export default function CapturePage() {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isGood, captureState, doCapture]);
-
-  function handleManualCapture() {
-    if (captureState !== 'uploading' && captureState !== 'accepted') {
-      void doCapture();
-    }
-  }
-
-  function handleRetake() {
-    setServerFeedback('');
-    setHoldProgress(0);
-    setCaptureState('idle');
-    isCapturingRef.current = false;
-  }
+  }, [
+    isGood,
+    landmarkerResult.facesDetected,
+    landmarkerResult.pitch,
+    landmarkerResult.yaw,
+    captureState,
+    doCapture,
+  ]);
 
   return (
     <div className="faceid-screen">
@@ -285,6 +279,11 @@ export default function CapturePage() {
 
       {/* Main Scanner Container */}
       <main className="faceid-main">
+        {currentPoseIndex >= 2 && (
+          <div className="faceid-angle-prompt" aria-live="polite">
+            {currentPoseIndex === 2 ? 'Turn left' : 'Turn right'}
+          </div>
+        )}
         {cameraError ? (
           <div className="faceid-error-card">
             <p className="faceid-error-card__msg">{cameraError}</p>
@@ -324,7 +323,10 @@ export default function CapturePage() {
 
         {/* Apple Face ID Typography Prompt */}
         <div className="faceid-prompt-block">
-          <h1 className="faceid-title">Move your head slowly to complete the circle.</h1>
+          <h1 className="faceid-title">
+            Photo {currentPoseIndex + 1}: {currentPose.label}
+          </h1>
+          <p className="faceid-instruction">{currentPose.instruction}</p>
           <p className={`faceid-subtitle ${isGood ? 'faceid-subtitle--good' : ''}`}>
             {guidanceText}
           </p>
@@ -337,25 +339,8 @@ export default function CapturePage() {
           </div>
         )}
 
-        {/* Shutter / Controls */}
+        {/* Capture is automatic; retain only the optional overlay control. */}
         <div className="faceid-controls">
-          {captureState === 'rejected' ? (
-            <button type="button" className="faceid-retake-btn" onClick={handleRetake}>
-              Try Again
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="faceid-shutter-btn"
-              onClick={handleManualCapture}
-              disabled={captureState === 'uploading' || captureState === 'accepted'}
-              aria-label="Capture photo"
-              title="Take photo"
-            >
-              <span className="faceid-shutter-btn__inner" />
-            </button>
-          )}
-
           <div className="faceid-footer-actions">
             <button
               type="button"

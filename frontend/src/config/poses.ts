@@ -1,58 +1,58 @@
 /**
  * Face capture sequence configuration — kept in sync with backend/app/services/pose_service.py
  *
- * 4 progressive face photo captures (Photo 1 to 4) replicating Apple Face ID enrollment.
- * Focuses on natural face presence, valid centering, and effortless auto-capture.
+ * The server checks side-view magnitude, not left/right yaw direction.
  */
 import type { PoseConfig, PoseName } from '../types';
 
 export const POSES: PoseConfig[] = [
   {
     name: 'PHOTO_1' as PoseName,
-    label: 'Photo 1',
-    instruction: 'Center your face inside the circle',
-    yawMin: -90,
-    yawMax: 90,
-    pitchMin: -90,
-    pitchMax: 90,
-    rollMax: 35,
+    label: 'Front',
+    instruction: 'Look straight at the camera',
+    yawMin: -45,
+    yawMax: 45,
+    pitchMin: -45,
+    pitchMax: 45,
+    rollMax: 50,
   },
   {
     name: 'PHOTO_2' as PoseName,
-    label: 'Photo 2',
-    instruction: 'Move your head slowly to complete the circle',
-    yawMin: -90,
-    yawMax: 90,
-    pitchMin: -90,
-    pitchMax: 90,
-    rollMax: 35,
+    label: 'Front again',
+    instruction: 'Look at the camera for one more front photo',
+    yawMin: -45,
+    yawMax: 45,
+    pitchMin: -45,
+    pitchMax: 45,
+    rollMax: 50,
   },
   {
     name: 'PHOTO_3' as PoseName,
-    label: 'Photo 3',
-    instruction: 'Move your head slowly to complete the circle',
+    label: 'Turn left',
+    instruction: 'Turn your face slightly to the left',
     yawMin: -90,
     yawMax: 90,
-    pitchMin: -90,
-    pitchMax: 90,
-    rollMax: 35,
+    pitchMin: -60,
+    pitchMax: 60,
+    rollMax: 50,
   },
   {
     name: 'PHOTO_4' as PoseName,
-    label: 'Photo 4',
-    instruction: 'Move your head slowly to complete the circle',
+    label: 'Turn right',
+    instruction: 'Turn your face slightly to the right',
     yawMin: -90,
     yawMax: 90,
-    pitchMin: -90,
-    pitchMax: 90,
-    rollMax: 35,
+    pitchMin: -60,
+    pitchMax: 60,
+    rollMax: 50,
   },
 ];
 
 const POSE_NAME_MAP: Record<string, string> = {
   FRONT: 'PHOTO_1',
-  LEFT: 'PHOTO_2',
-  RIGHT: 'PHOTO_3',
+  FRONT_SLIGHT_RIGHT: 'PHOTO_2',
+  LEFT: 'PHOTO_3',
+  RIGHT: 'PHOTO_4',
   UP: 'PHOTO_4',
   PHOTO_1: 'PHOTO_1',
   PHOTO_2: 'PHOTO_2',
@@ -71,17 +71,18 @@ export function getPose(name: string): PoseConfig | undefined {
 }
 
 /**
- * Validates natural face upright posture (roll <= 35 deg).
- * Returns null if good, or a helpful hint if tilted too far sideways.
+ * The server validates pose variation. Client pose angles are guidance-only,
+ * so a browser-specific yaw convention cannot block an otherwise good face.
  */
 export function checkPose(
   pose: PoseConfig,
-  _yaw: number,
-  _pitch: number,
+  yaw: number,
+  pitch: number,
   roll: number
 ): string | null {
-  if (Math.abs(roll) > pose.rollMax) {
-    return roll > 0 ? 'Keep your head upright (leaning right)' : 'Keep your head upright (leaning left)';
-  }
+  void pose;
+  void yaw;
+  void pitch;
+  void roll;
   return null;
 }

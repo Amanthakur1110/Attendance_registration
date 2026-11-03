@@ -171,8 +171,21 @@ def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
             "BLURRY_IMAGE",
         )
 
-    # ── 7. Pose check ──────────────────────────────────────────────────────
-    pose_result = check_pose(expected_pose_cfg, face.yaw, face.pitch, face.roll)
+    previous_photos: list[Photo] = (
+        db.session.query(Photo)
+        .filter(Photo.roll == roll)
+        .order_by(Photo.photo_no)
+        .all()
+    )
+
+    # ── 7. Requested front/side-view pose check ─────────────────────────────
+    pose_result = check_pose(
+        expected_pose_cfg,
+        face.yaw,
+        face.pitch,
+        face.roll,
+        [photo.yaw for photo in previous_photos],
+    )
     if not pose_result.ok:
         raise PhotoError(pose_result.message, "WRONG_POSE")
 
@@ -190,21 +203,17 @@ def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
     # ── 9. Same-person check (embedding cosine similarity) ─────────────────
     photo_no = len(accepted) + 1
     if photo_no > 1:
-        first_photo: Photo | None = (
-            db.session.query(Photo)
-            .filter(Photo.roll == roll, Photo.photo_no == 1)
-            .first()
-        )
-        if first_photo and first_photo.embedding:
-            ref_embedding = np.frombuffer(first_photo.embedding, dtype=np.float32)
-            sim = cosine_similarity(face.embedding, ref_embedding)
-            threshold_sim = current_app.config["SAME_PERSON_THRESHOLD"]
-            if sim < threshold_sim:
-                raise PhotoError(
-                    "This does not appear to be the same person as in your first photo. "
-                    "Please ensure only you are in the frame.",
-                    "DIFFERENT_PERSON",
-                )
+        threshold_sim = current_app.config["SAME_PERSON_THRESHOLD"]
+        for previous_photo in previous_photos:
+            if previous_photo.embedding:
+                ref_embedding = np.frombuffer(previous_photo.embedding, dtype=np.float32)
+                sim = cosine_similarity(face.embedding, ref_embedding)
+                if sim < threshold_sim:
+                    raise PhotoError(
+                        "This does not appear to be the same person as your earlier photos. "
+                        "Please ensure only you are in the frame.",
+                        "DIFFERENT_PERSON",
+                    )
 
     # ── 10. Save atomically + DB insert ────────────────────────────────────
     _save_photo_atomic(

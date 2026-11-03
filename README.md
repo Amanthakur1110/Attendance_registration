@@ -5,7 +5,7 @@ A robust, production-grade face-photo enrollment system for students with **Flas
 The user flow mimics **Google / Apple Face ID enrollment**:
 1. **Roll Number** input (e.g. `524cs0019`)
 2. **Email OTP** verification (`<roll>@iiitk.ac.in` via Gmail SMTP_SSL; delivery runs in a background worker so the request responds immediately)
-3. **Live-guided multi-pose face capture** (Front, Left, Right, Up) with automatic capture and backend-verified pose checks
+3. **Live-guided multi-pose face capture** (Front, Front, Left, Right) with automatic capture and backend-verified pose checks
 4. **Instant authoritative backend validation** (face detection, bounds check, blur check, head pose angles, duplicate SHA-256 check, and same-person embedding cosine similarity)
 5. **Session-safe completion & resume support**
 
@@ -217,18 +217,18 @@ Angle coordinate system:
   - `> 0`: Person tilts head **UP** (chin raised)
   - `< 0`: Person tilts head **DOWN** (chin lowered)
 - **Roll**:
-  - In-plane tilt (kept within $\pm 20^\circ$)
+  - In-plane tilt (kept within $\pm 50^\circ$)
 
 ### Pose Sequence Configuration
 
-Both `backend/app/services/pose_service.py` and `frontend/src/config/poses.ts` share the exact configuration:
+The backend validates the requested sequence using InsightFace pose estimates: two front-facing photos, then two slightly different side views. Either side is accepted; the server does not depend on yaw sign, which can vary with camera mirroring. The camera auto-captures a visible face after a short hold and retries automatically after a brief pause if a photo is rejected.
 
 | Pose # | Name | Direction | Yaw Range | Pitch Range | Prompt Text |
 | :---: | :---: | :---: | :---: | :---: | :--- |
-| **1** | `FRONT` | Straight | $[-12^\circ, +12^\circ]$ | $[-12^\circ, +12^\circ]$ | *"Look straight at the camera"* |
-| **2** | `LEFT` | Person's Left | $[+15^\circ, +55^\circ]$ | $[-18^\circ, +18^\circ]$ | *"Turn slightly toward your left shoulder and keep both eyes visible"* |
-| **3** | `RIGHT` | Person's Right | $[-55^\circ, -15^\circ]$ | $[-18^\circ, +18^\circ]$ | *"Turn slightly toward your right shoulder and keep both eyes visible"* |
-| **4** | `UP` | Chin Up | $[-15^\circ, +15^\circ]$ | $[+12^\circ, +30^\circ]$ | *"Lift your chin slightly up"* |
+| **1** | `PHOTO_1` | Front-facing | $[-45^\circ, +45^\circ]$ | $[-45^\circ, +45^\circ]$ | *"Look straight at the camera"* |
+| **2** | `PHOTO_2` | Front-facing again | $[-45^\circ, +45^\circ]$ | $[-45^\circ, +45^\circ]$ | *"Look at the camera for one more front photo"* |
+| **3** | `PHOTO_3` | Side view, either direction | $[-90^\circ, +90^\circ]$, at least $8^\circ$ from front | $[-60^\circ, +60^\circ]$ | *"Turn your face slightly to either side"* |
+| **4** | `PHOTO_4` | A slightly different side view | At least $5^\circ$ different from the prior side view | $[-60^\circ, +60^\circ]$ | *"Change to a slightly different side view"* |
 
 To test or calibrate camera angles for custom hardware:
 ```bash
@@ -253,7 +253,7 @@ When a photo is POSTed to `/api/photos/upload`:
    - Face confidence $< 0.70$ $\rightarrow$ rejected
 5. **Framing & Boundary**: Face width must exceed 15% of frame width and must be entirely inside frame boundaries.
 6. **Blurriness**: Variance of Laplacian on face crop must exceed 60.0.
-7. **Pose Angle Check**: Measured yaw, pitch, and roll are verified against configured ranges with specific directional guidance hints.
+7. **Pose Angle Check**: Measured yaw, pitch, and roll are verified against configured ranges with specific directional guidance hints; repeated straight-on frames cannot pass a side-angle step.
 8. **Anti-Duplicate Check**: SHA-256 hash must not match previously submitted photos for the student.
 9. **Same-Person Identity Verification**:
    - Photo 1 generates the identity embedding.
@@ -280,7 +280,7 @@ python -m pytest tests/ -v
   - Expired OTP rejected.
   - OTP is single-use only.
   - Completed students get `409 ALREADY_COMPLETED` without sending new OTP.
-- [x] **`test_pose.py`**: Verifies angle classifications for Front, Left, Right, Up, in-plane roll, and InsightFace coordinate conventions.
+- [x] **`test_pose.py`**: Verifies the two-front/left/right sequence, directional guidance, in-plane roll, and InsightFace coordinate conventions.
 - [x] **`test_upload_flow.py`**:
   - Unauthenticated requests return `401`.
   - Out-of-order pose upload returns `409 WRONG_POSE_ORDER`.
@@ -303,7 +303,7 @@ python -m pytest tests/ -v
 | 4 | Enter correct 6-digit OTP | Session established; automatically navigates to `/capture`. |
 | 5 | Review Tips modal | Displays tips (lighting, no masks, 1 person) and "Start" button. |
 | 6 | Camera stream | Video preview displays mirrored without a face-frame overlay. |
-| 7 | Pose guidance | Real-time feedback updates: "Look straight", "Turn left", "Lift chin". |
+| 7 | Pose guidance | Real-time prompts guide the user to look forward or change their face angle slightly. |
 | 8 | Auto-capture | Holding a suitable pose briefly triggers automatic upload and backend validation. |
 | 9 | Upload status | Accepted photo thumbnail appears in the progress bar and advances to the next pose. |
 | 10 | Refresh during capture | Refresh browser at Photo 3; status API resumes at Photo 3 without restarting. |

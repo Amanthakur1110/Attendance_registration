@@ -1,9 +1,4 @@
-"""Pose / Face photo sequence configuration and classification.
-
-Supports 4 progressive face photo captures (PHOTO_1, PHOTO_2, PHOTO_3, PHOTO_4)
-along with legacy aliases (FRONT, LEFT, RIGHT, UP) for backward compatibility.
-Focuses on valid face presence, proper framing, and user-friendly capture.
-"""
+"""Pose sequence and tolerant server-side head-angle validation."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,30 +13,47 @@ class PoseConfig:
     yaw_max: float = 90.0
     pitch_min: float = -90.0
     pitch_max: float = 90.0
-    roll_max: float = 35.0    # maximum absolute in-plane roll (symmetric)
+    roll_max: float = 50.0    # maximum absolute in-plane roll (symmetric)
 
 
-# ── Canonical 4-step photo capture sequence ────────────────────────────────
+# InsightFace yaw can be noisy across camera orientation and preview mirroring.
+# Later photos therefore validate side-view magnitude, not left/right sign.
 POSES: list[PoseConfig] = [
     PoseConfig(
         name="PHOTO_1",
-        label="Photo 1",
-        instruction="Center your face inside the circle",
+        label="Front",
+        instruction="Look straight at the camera",
+        yaw_min=-45.0,
+        yaw_max=45.0,
+        pitch_min=-45.0,
+        pitch_max=45.0,
     ),
     PoseConfig(
         name="PHOTO_2",
-        label="Photo 2",
-        instruction="Move your head slowly to complete the circle",
+        label="Front again",
+        instruction="Look at the camera for one more front photo",
+        yaw_min=-45.0,
+        yaw_max=45.0,
+        pitch_min=-45.0,
+        pitch_max=45.0,
     ),
     PoseConfig(
         name="PHOTO_3",
-        label="Photo 3",
-        instruction="Move your head slowly to complete the circle",
+        label="Different angle",
+        instruction="Turn your face slightly to either side",
+        yaw_min=-90.0,
+        yaw_max=90.0,
+        pitch_min=-60.0,
+        pitch_max=60.0,
     ),
     PoseConfig(
         name="PHOTO_4",
-        label="Photo 4",
-        instruction="Move your head slowly to complete the circle",
+        label="Another angle",
+        instruction="Change to a slightly different side view",
+        yaw_min=-90.0,
+        yaw_max=90.0,
+        pitch_min=-60.0,
+        pitch_max=60.0,
     ),
 ]
 
@@ -50,8 +62,9 @@ POSE_NAMES: list[str] = [p.name for p in POSES]
 # Aliases mapping legacy names to standard steps
 POSE_ALIASES: dict[str, str] = {
     "FRONT": "PHOTO_1",
-    "LEFT": "PHOTO_2",
-    "RIGHT": "PHOTO_3",
+    "FRONT_SLIGHT_RIGHT": "PHOTO_2",
+    "LEFT": "PHOTO_3",
+    "RIGHT": "PHOTO_4",
     "UP": "PHOTO_4",
     "PHOTO_1": "PHOTO_1",
     "PHOTO_2": "PHOTO_2",
@@ -79,13 +92,35 @@ class PoseCheckResult:
     message: str   # empty when ok
 
 
-def check_pose(expected: PoseConfig, yaw: float, pitch: float, roll: float) -> PoseCheckResult:
+def check_pose(
+    expected: PoseConfig,
+    yaw: float,
+    pitch: float,
+    roll: float,
+    previous_yaws: list[float] | None = None,
+) -> PoseCheckResult:
     """
-    Validate that head is kept reasonably upright (roll within +/-35 deg).
-    Does not restrict yaw/pitch so students can naturally complete the Face ID circle.
+    Accept either turn direction for side views; require only a small yaw change
+    for the final view so camera mirror/sign conventions cannot block capture.
     """
+    if yaw < expected.yaw_min or yaw > expected.yaw_max:
+        return PoseCheckResult(False, "Keep your face visible to the camera.")
+
+    if not expected.pitch_min <= pitch <= expected.pitch_max:
+        return PoseCheckResult(False, "Keep your whole face visible to the camera.")
+
     if abs(roll) > expected.roll_max:
-        direction = "right" if roll > 0 else "left"
-        return PoseCheckResult(False, f"Please keep your head upright (it's leaning to the {direction}).")
+        return PoseCheckResult(False, "Keep your face upright and visible.")
+
+    if expected.name in {"PHOTO_3", "PHOTO_4"} and abs(yaw) < 8.0:
+        return PoseCheckResult(False, "Turn your face slightly to either side.")
+
+    if expected.name == "PHOTO_4" and previous_yaws:
+        previous_side_yaw = previous_yaws[-1]
+        if abs(yaw - previous_side_yaw) < 5.0:
+            return PoseCheckResult(
+                False,
+                "Change your face angle slightly, in either direction.",
+            )
 
     return PoseCheckResult(True, "")

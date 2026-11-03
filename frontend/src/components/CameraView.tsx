@@ -355,6 +355,27 @@ export const CameraView = forwardRef<CameraViewHandle, CameraViewProps>(
               aria-hidden="true"
             />
           </div>
+          <svg
+            className={`faceid-face-guide faceid-face-guide--${currentStepIndex}`}
+            viewBox="0 0 100 120"
+            aria-hidden="true"
+          >
+            <path
+              className="faceid-face-guide__outline"
+              d="M50 8 C28 8 18 24 19 47 C20 70 31 88 50 91 C69 88 80 70 81 47 C82 24 72 8 50 8Z"
+            />
+            <path className="faceid-face-guide__features" d="M31 43 Q38 39 44 43 M56 43 Q62 39 69 43 M50 45 L47 59 L53 59 M41 69 Q50 75 59 69" />
+            <path className="faceid-face-guide__shoulders" d="M25 108 Q29 91 43 88 M57 88 Q71 91 75 108" />
+            {currentStepIndex === 1 && (
+              <path className="faceid-face-guide__arrow" d="M14 46 H4 M9 41 L4 46 L9 51" />
+            )}
+            {currentStepIndex === 3 && (
+              <path className="faceid-face-guide__arrow" d="M50 4 V-4 M45 1 L50 -4 L55 1" />
+            )}
+            {currentStepIndex === 2 && (
+              <path className="faceid-face-guide__arrow" d="M86 46 H96 M91 41 L96 46 L91 51" />
+            )}
+          </svg>
         </div>
 
         {/* Apple Face ID Radial Ticks Ring (matches attached image) */}
