@@ -18,9 +18,7 @@ class FaceResult:
     """Parsed result for a single face detected in an image."""
 
     det_score: float
-    yaw: float    # degrees; positive = face turns to the person's left (InsightFace convention)
-    pitch: float  # degrees; positive = face tilts up
-    roll: float   # degrees; in-plane roll
+    keypoints: np.ndarray | None
     embedding: np.ndarray  # 512-dim (buffalo_s) or 512-dim (buffalo_l)
     bbox: tuple[float, float, float, float]  # x1, y1, x2, y2
 
@@ -60,7 +58,7 @@ def analyse(image_bytes: bytes) -> list[FaceResult]:
     """
     Analyse image bytes with InsightFace.
     Returns a list of FaceResult (one per detected face).
-    Filters by faces that have pose and embedding data.
+    Filters by faces that have embeddings; pose keypoints may be absent on edge cases.
     """
     import cv2
     import numpy as np
@@ -108,19 +106,17 @@ def analyse(image_bytes: bytes) -> list[FaceResult]:
 
     results: list[FaceResult] = []
     for face in faces:
-        if not hasattr(face, "pose") or face.pose is None:
-            continue
         if not hasattr(face, "embedding") or face.embedding is None:
             continue
-
-        pitch, yaw, roll = float(face.pose[0]), float(face.pose[1]), float(face.pose[2])
         bbox = tuple(face.bbox.tolist())  # type: ignore[arg-type]
         results.append(
             FaceResult(
                 det_score=float(face.det_score),
-                yaw=yaw,
-                pitch=pitch,
-                roll=roll,
+                keypoints=(
+                    np.asarray(face.kps, dtype=np.float32)
+                    if hasattr(face, "kps") and face.kps is not None
+                    else None
+                ),
                 embedding=face.embedding,
                 bbox=bbox,  # type: ignore[arg-type]
             )
@@ -135,4 +131,3 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return float(np.dot(a, b) / (norm_a * norm_b))
-

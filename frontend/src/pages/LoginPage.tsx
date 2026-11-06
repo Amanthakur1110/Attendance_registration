@@ -40,26 +40,26 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="faceid-screen profile-page">
-      {/* Face icon */}
-      <header className="faceid-header" style={{ marginBottom: 0 }}>
+    <div className="faceid-screen profile-page login-page">
+      <header className="faceid-header login-header">
         <div className="profile-logo" aria-hidden="true">
-          <svg viewBox="0 0 60 60" width="64" height="64">
-            <circle cx="30" cy="24" r="15" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" />
+          <svg viewBox="0 0 60 60" width="56" height="56">
+            <circle cx="30" cy="24" r="15" fill="none" stroke="currentColor" strokeWidth="1.8" />
             {/* Eyes */}
-            <circle cx="23" cy="22" r="2.5" fill="rgba(255,255,255,0.7)" />
-            <circle cx="37" cy="22" r="2.5" fill="rgba(255,255,255,0.7)" />
+            <circle cx="23" cy="22" r="2.5" fill="currentColor" />
+            <circle cx="37" cy="22" r="2.5" fill="currentColor" />
             {/* Smile */}
-            <path d="M23 29 Q30 35 37 29" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+            <path d="M23 29 Q30 35 37 29" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" />
             {/* Neck / body */}
-            <ellipse cx="30" cy="52" rx="16" ry="10" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" />
+            <ellipse cx="30" cy="52" rx="16" ry="10" fill="none" stroke="currentColor" strokeWidth="1.8" />
           </svg>
         </div>
-        <h1 className="profile-title">Face Registration</h1>
-        <p className="profile-subtitle" style={{ marginTop: 6 }}>IIIT Kurnool · Biometric Enrollment</p>
+        <p className="profile-campus">IIIT Kurnool</p>
+        <h1 className="profile-title">Photo registration</h1>
+        <p className="profile-subtitle">Sign in with your institute roll number.</p>
       </header>
 
-      <main className="profile-main">
+      <main className="profile-main login-card">
         <form className="profile-form" onSubmit={handleSubmit} noValidate>
           <div className="profile-field">
             <label className="profile-label" htmlFor="roll-input">
@@ -71,13 +71,12 @@ export default function LoginPage() {
               className="profile-input"
               value={roll}
               onChange={(e) => { setRoll(e.target.value); setError(''); }}
-              placeholder="e.g. 524cs0019"
+              placeholder="Your roll number"
               autoComplete="username"
               autoFocus
               disabled={loading}
               spellCheck={false}
             />
-            <p className="profile-hint">Lowercase only — e.g. 524cs0019</p>
           </div>
 
           {error && (
@@ -91,13 +90,12 @@ export default function LoginPage() {
           >
             {loading
               ? <span className="faceid-spinner" style={{ borderTopColor: '#000', borderColor: 'rgba(0,0,0,0.2)' }} />
-              : 'Send OTP →'}
+              : 'Send sign-in code'}
           </button>
         </form>
 
         <p className="profile-footer-note">
-          An OTP will be sent to your institute email.<br />
-          Check SPAM if not received within 30 seconds.
+          We will send a sign-in code to your institute email.
         </p>
       </main>
     </div>

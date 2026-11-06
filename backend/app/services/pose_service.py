@@ -1,7 +1,9 @@
-"""Pose sequence and tolerant server-side head-angle validation."""
+"""Keypoint-ratio pose validation shared with the camera capture flow."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+from typing import Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -9,51 +11,28 @@ class PoseConfig:
     name: str                 # internal key, e.g. "PHOTO_1"
     label: str                # human label, e.g. "Photo 1"
     instruction: str          # shown to the student
-    yaw_min: float = -90.0
-    yaw_max: float = 90.0
-    pitch_min: float = -90.0
-    pitch_max: float = 90.0
-    roll_max: float = 50.0    # maximum absolute in-plane roll (symmetric)
 
 
-# InsightFace yaw can be noisy across camera orientation and preview mirroring.
-# Later photos therefore validate side-view magnitude, not left/right sign.
 POSES: list[PoseConfig] = [
     PoseConfig(
         name="PHOTO_1",
         label="Front",
         instruction="Look straight at the camera",
-        yaw_min=-45.0,
-        yaw_max=45.0,
-        pitch_min=-45.0,
-        pitch_max=45.0,
     ),
     PoseConfig(
         name="PHOTO_2",
-        label="Front again",
-        instruction="Look at the camera for one more front photo",
-        yaw_min=-45.0,
-        yaw_max=45.0,
-        pitch_min=-45.0,
-        pitch_max=45.0,
+        label="Turn left",
+        instruction="Turn a bit more to your LEFT",
     ),
     PoseConfig(
         name="PHOTO_3",
-        label="Different angle",
-        instruction="Turn your face slightly to either side",
-        yaw_min=-90.0,
-        yaw_max=90.0,
-        pitch_min=-60.0,
-        pitch_max=60.0,
+        label="Turn right",
+        instruction="Turn a bit more to your RIGHT",
     ),
     PoseConfig(
         name="PHOTO_4",
-        label="Another angle",
-        instruction="Change to a slightly different side view",
-        yaw_min=-90.0,
-        yaw_max=90.0,
-        pitch_min=-60.0,
-        pitch_max=60.0,
+        label="Look up",
+        instruction="Tilt your chin up slightly",
     ),
 ]
 
@@ -62,9 +41,9 @@ POSE_NAMES: list[str] = [p.name for p in POSES]
 # Aliases mapping legacy names to standard steps
 POSE_ALIASES: dict[str, str] = {
     "FRONT": "PHOTO_1",
-    "FRONT_SLIGHT_RIGHT": "PHOTO_2",
-    "LEFT": "PHOTO_3",
-    "RIGHT": "PHOTO_4",
+    "FRONT_SLIGHT_RIGHT": "PHOTO_1",
+    "LEFT": "PHOTO_2",
+    "RIGHT": "PHOTO_3",
     "UP": "PHOTO_4",
     "PHOTO_1": "PHOTO_1",
     "PHOTO_2": "PHOTO_2",
@@ -92,35 +71,101 @@ class PoseCheckResult:
     message: str   # empty when ok
 
 
+def compute_pose_ratios(
+    keypoints: Sequence[Sequence[float]],
+) -> tuple[float, float]:
+    """Compute yaw/pitch ratios from InsightFace's five ordered keypoints."""
+    if len(keypoints) < 5:
+        raise ValueError("Five facial keypoints are required.")
+
+    left_eye, right_eye, nose, left_mouth, right_mouth = keypoints[:5]
+    coordinates = [
+        float(point[axis])
+        for point in (left_eye, right_eye, nose, left_mouth, right_mouth)
+        for axis in (0, 1)
+    ]
+    if not all(math.isfinite(value) for value in coordinates):
+        raise ValueError("Facial keypoints must contain finite coordinates.")
+
+    eye_mid_x = (float(left_eye[0]) + float(right_eye[0])) / 2
+    eye_mid_y = (float(left_eye[1]) + float(right_eye[1])) / 2
+    inter_eye_distance = math.hypot(
+        float(right_eye[0]) - float(left_eye[0]),
+        float(right_eye[1]) - float(left_eye[1]),
+    )
+    mouth_mid_y = (float(left_mouth[1]) + float(right_mouth[1])) / 2
+    vertical_eye_mouth_distance = mouth_mid_y - eye_mid_y
+
+    if inter_eye_distance <= 0 or abs(vertical_eye_mouth_distance) < 1e-6:
+        raise ValueError("Facial keypoints do not define usable eye and mouth distances.")
+
+    yaw_ratio = (float(nose[0]) - eye_mid_x) / inter_eye_distance
+    pitch_ratio = (float(nose[1]) - eye_mid_y) / vertical_eye_mouth_distance
+    return yaw_ratio, pitch_ratio
+
+
+def signed_yaw_ratio(yaw_ratio: float, yaw_sign: int) -> float:
+    """Apply the configured left/right convention in one place."""
+    if yaw_sign not in (-1, 1):
+        raise ValueError("YAW_SIGN must be either 1 or -1.")
+    return yaw_ratio * yaw_sign
+
+
+def get_pose_thresholds(config: Mapping | None = None) -> dict[str, float | int]:
+    from ..config import Config
+
+    defaults = {
+        "POSE_FRONT_YAW_MAX": Config.POSE_FRONT_YAW_MAX,
+        "POSE_SIDE_YAW_MIN": Config.POSE_SIDE_YAW_MIN,
+        "POSE_UP_PITCH_DELTA": Config.POSE_UP_PITCH_DELTA,
+        "POSE_UP_YAW_MAX": Config.POSE_UP_YAW_MAX,
+        "POSE_YAW_SIGN": Config.POSE_YAW_SIGN,
+        "POSE_SIDE_FACE_CONFIDENCE": Config.POSE_SIDE_FACE_CONFIDENCE,
+    }
+    if config is not None:
+        defaults.update(
+            {key: config[key] for key in defaults if key in config}
+        )
+    return {
+        "front_yaw_max": float(defaults["POSE_FRONT_YAW_MAX"]),
+        "side_yaw_min": float(defaults["POSE_SIDE_YAW_MIN"]),
+        "up_pitch_delta": float(defaults["POSE_UP_PITCH_DELTA"]),
+        "up_yaw_max": float(defaults["POSE_UP_YAW_MAX"]),
+        "yaw_sign": int(defaults["POSE_YAW_SIGN"]),
+        "side_face_confidence": float(defaults["POSE_SIDE_FACE_CONFIDENCE"]),
+    }
+
+
 def check_pose(
     expected: PoseConfig,
-    yaw: float,
-    pitch: float,
-    roll: float,
-    previous_yaws: list[float] | None = None,
+    yaw_ratio: float,
+    pitch_ratio: float,
+    front_pitch_ratio: float | None,
+    det_score: float,
+    thresholds: Mapping | None = None,
 ) -> PoseCheckResult:
-    """
-    Accept either turn direction for side views; require only a small yaw change
-    for the final view so camera mirror/sign conventions cannot block capture.
-    """
-    if yaw < expected.yaw_min or yaw > expected.yaw_max:
-        return PoseCheckResult(False, "Keep your face visible to the camera.")
+    values = get_pose_thresholds(thresholds)
+    directed_yaw = signed_yaw_ratio(yaw_ratio, int(values["yaw_sign"]))
 
-    if not expected.pitch_min <= pitch <= expected.pitch_max:
-        return PoseCheckResult(False, "Keep your whole face visible to the camera.")
-
-    if abs(roll) > expected.roll_max:
-        return PoseCheckResult(False, "Keep your face upright and visible.")
-
-    if expected.name in {"PHOTO_3", "PHOTO_4"} and abs(yaw) < 8.0:
-        return PoseCheckResult(False, "Turn your face slightly to either side.")
-
-    if expected.name == "PHOTO_4" and previous_yaws:
-        previous_side_yaw = previous_yaws[-1]
-        if abs(yaw - previous_side_yaw) < 5.0:
-            return PoseCheckResult(
-                False,
-                "Change your face angle slightly, in either direction.",
-            )
+    if expected.name == "PHOTO_1":
+        if abs(directed_yaw) > float(values["front_yaw_max"]):
+            return PoseCheckResult(False, "Look straight at the camera.")
+    elif expected.name == "PHOTO_2":
+        if det_score < float(values["side_face_confidence"]):
+            return PoseCheckResult(False, "Move closer and keep your face well lit.")
+        if directed_yaw < float(values["side_yaw_min"]):
+            return PoseCheckResult(False, "Turn a bit more to your LEFT.")
+    elif expected.name == "PHOTO_3":
+        if det_score < float(values["side_face_confidence"]):
+            return PoseCheckResult(False, "Move closer and keep your face well lit.")
+        if directed_yaw > -float(values["side_yaw_min"]):
+            return PoseCheckResult(False, "Turn a bit more to your RIGHT.")
+    elif expected.name == "PHOTO_4":
+        if front_pitch_ratio is None:
+            return PoseCheckResult(False, "Front photo reference is missing; please contact the supervisor.")
+        if abs(directed_yaw) > float(values["up_yaw_max"]):
+            return PoseCheckResult(False, "Face the camera more directly, then tilt your chin up.")
+        if pitch_ratio > front_pitch_ratio - float(values["up_pitch_delta"]):
+            return PoseCheckResult(False, "Tilt your chin up slightly.")
 
     return PoseCheckResult(True, "")

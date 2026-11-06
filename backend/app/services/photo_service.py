@@ -15,9 +15,19 @@ from flask import current_app
 
 from ..extensions import db
 from ..models.photo import Photo
+from ..models.pose_attempt import PoseAttempt
 from ..models.user import User
 from ..services.face_service import analyse, cosine_similarity, FaceResult
-from ..services.pose_service import POSES, POSE_NAMES, get_pose, check_pose, normalize_pose_name
+from ..services.pose_service import (
+    POSES,
+    POSE_NAMES,
+    check_pose,
+    compute_pose_ratios,
+    get_pose,
+    get_pose_thresholds,
+    normalize_pose_name,
+    signed_yaw_ratio,
+)
 from ..utils.validators import validate_image_bytes
 
 logger = logging.getLogger(__name__)
@@ -29,9 +39,31 @@ BLUR_THRESHOLD = 18.0       # variance of Laplacian (generous threshold for norm
 
 class PhotoError(Exception):
     """Raised when a photo fails validation; carries an error code."""
-    def __init__(self, message: str, code: str = "PHOTO_REJECTED"):
+    def __init__(
+        self, message: str, code: str = "PHOTO_REJECTED", details: dict | None = None
+    ):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
+
+
+MAX_POSE_ATTEMPTS = 3
+
+
+def get_pose_attempt_count(roll: str, pose: str) -> int:
+    row = db.session.query(PoseAttempt).filter_by(roll=roll, pose=pose).first()
+    return row.attempts if row else 0
+
+
+def _record_pose_attempt(roll: str, pose: str) -> int:
+    row = db.session.query(PoseAttempt).filter_by(roll=roll, pose=pose).first()
+    if row is None:
+        row = PoseAttempt(roll=roll, pose=pose, attempts=1)
+        db.session.add(row)
+    else:
+        row.attempts += 1
+    db.session.commit()
+    return row.attempts
 
 
 def get_accepted_poses(roll: str) -> list[str]:
@@ -54,7 +86,9 @@ def get_next_pose_name(roll: str) -> str | None:
     return None
 
 
-def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
+def process_upload(
+    roll: str, image_bytes: bytes, claimed_pose: str, submit_anyway: bool = False
+) -> dict:
     """
     Full validation pipeline for a photo upload.
     Returns a dict with photo info on success.
@@ -83,6 +117,14 @@ def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
             f"Expected pose '{next_pose_name}' next, but received '{claimed_pose}'. "
             f"Please follow the guided sequence.",
             "WRONG_POSE_ORDER",
+        )
+
+    pose_attempts = get_pose_attempt_count(roll, next_pose_name)
+    if submit_anyway and pose_attempts < MAX_POSE_ATTEMPTS:
+        raise PhotoError(
+            "Submit anyway is available after three pose rejections.",
+            "SUBMIT_ANYWAY_NOT_AVAILABLE",
+            {"pose_attempts": pose_attempts},
         )
 
     expected_pose_cfg = get_pose(next_pose_name)
@@ -143,6 +185,16 @@ def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
 
     face: FaceResult = good_faces[0]
 
+    thresholds = get_pose_thresholds(current_app.config)
+    if (
+        next_pose_name in {"PHOTO_2", "PHOTO_3"}
+        and face.det_score < float(thresholds["side_face_confidence"])
+    ):
+        raise PhotoError(
+            "Move closer and keep your face well lit.",
+            "NO_FACE",
+        )
+
     # ── 5. Face size and bounds check ──────────────────────────────────────
     x1, y1, x2, y2 = face.bbox
     face_w = x2 - x1
@@ -178,16 +230,47 @@ def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
         .all()
     )
 
-    # ── 7. Requested front/side-view pose check ─────────────────────────────
-    pose_result = check_pose(
-        expected_pose_cfg,
-        face.yaw,
-        face.pitch,
-        face.roll,
-        [photo.yaw for photo in previous_photos],
+    # ── 7. Keypoint-ratio pose check ────────────────────────────────────────
+    try:
+        raw_yaw_ratio, pitch_ratio = compute_pose_ratios(face.keypoints)
+    except (TypeError, ValueError, IndexError):
+        raw_yaw_ratio, pitch_ratio = None, None
+
+    front_pitch_ratio = next(
+        (
+            photo.pitch_ratio
+            for photo in previous_photos
+            if photo.pose == "PHOTO_1"
+        ),
+        None,
     )
-    if not pose_result.ok:
-        raise PhotoError(pose_result.message, "WRONG_POSE")
+    pose_result = None
+    if raw_yaw_ratio is not None and pitch_ratio is not None:
+        # Normalize the image-space yaw sign in one shared server helper.
+        pose_result = check_pose(
+            expected_pose_cfg,
+            raw_yaw_ratio,
+            pitch_ratio,
+            front_pitch_ratio,
+            face.det_score,
+            thresholds,
+        )
+    pose_verified = bool(pose_result and pose_result.ok)
+    if not pose_verified and not submit_anyway:
+        message = (
+            pose_result.message
+            if pose_result
+            else "Keep both eyes, your nose, and your mouth visible to the camera."
+        )
+        attempts = _record_pose_attempt(roll, next_pose_name)
+        raise PhotoError(
+            message,
+            "WRONG_POSE",
+            {
+                "pose_attempts": attempts,
+                "can_submit_anyway": attempts >= MAX_POSE_ATTEMPTS,
+            },
+        )
 
     # ── 8. Duplicate check (SHA-256) ───────────────────────────────────────
     sha = hashlib.sha256(image_bytes).hexdigest()
@@ -223,16 +306,32 @@ def process_upload(roll: str, image_bytes: bytes, claimed_pose: str) -> dict:
         image_bytes=image_bytes,
         face=face,
         sha=sha,
+        yaw_ratio=(
+            signed_yaw_ratio(raw_yaw_ratio, int(thresholds["yaw_sign"]))
+            if raw_yaw_ratio is not None
+            else None
+        ),
+        pitch_ratio=pitch_ratio,
+        pose_verified=pose_verified,
     )
 
-    return {
+    result = {
         "photo_no": photo_no,
         "pose": next_pose_name,
         "confidence": face.det_score,
-        "yaw": face.yaw,
-        "pitch": face.pitch,
-        "roll_angle": face.roll,
+        "pose_verified": pose_verified,
     }
+    if current_app.config.get("DEBUG_POSE", False):
+        result["pose_debug"] = {
+            "yaw_ratio": (
+                signed_yaw_ratio(raw_yaw_ratio, int(thresholds["yaw_sign"]))
+                if raw_yaw_ratio is not None
+                else None
+            ),
+            "pitch_ratio": pitch_ratio,
+            "thresholds": thresholds,
+        }
+    return result
 
 
 def _save_photo_atomic(
@@ -242,6 +341,9 @@ def _save_photo_atomic(
     image_bytes: bytes,
     face: FaceResult,
     sha: str,
+    yaw_ratio: float | None,
+    pitch_ratio: float | None,
+    pose_verified: bool,
 ) -> None:
     """
     Write the photo to disk (temp → os.replace) then insert the DB row.
@@ -281,13 +383,19 @@ def _save_photo_atomic(
             pose=pose,
             path=final_path,
             confidence=face.det_score,
-            yaw=face.yaw,
-            pitch=face.pitch,
-            roll_angle=face.roll,
+            yaw=0.0,
+            pitch=0.0,
+            roll_angle=0.0,
+            yaw_ratio=yaw_ratio,
+            pitch_ratio=pitch_ratio,
+            pose_verified=pose_verified,
             sha256=sha,
             embedding=embedding_bytes,
         )
         db.session.add(photo_row)
+        attempt = db.session.query(PoseAttempt).filter_by(roll=roll, pose=pose).first()
+        if attempt:
+            db.session.delete(attempt)
 
         user.photo_count = photo_no
         if photo_no == len(POSES):

@@ -25,13 +25,13 @@ def send_otp_email(to_email: str, roll: str, otp: str) -> None:
             "GMAIL_USER and GMAIL_APP_PASSWORD must be set to send emails."
         )
 
-    subject = f"Your Face Registration OTP — {otp}"
+    subject = f"Aura Ai Attendance System — {otp}"
     html_body = _build_html(roll, otp, expiry)
     plain_body = _build_plain(roll, otp, expiry)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = gmail_user
+    msg["From"] =  f"Aura Ai Attendance System <{current_app.config["GMAIL_USER"]}>"
     msg["To"] = to_email
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))

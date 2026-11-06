@@ -1,103 +1,110 @@
-"""
-Pose calibration helper script.
+"""Print keypoint pose ratios for one image or a folder of calibration photos.
 
-Run this script to inspect InsightFace's yaw, pitch, and roll angles for an image or
-live camera test:
-    python backend/scripts/calibrate_pose.py --image path/to/sample.jpg
+Examples:
+    python backend/scripts/calibrate_pose.py --folder path/to/photos
+    python backend/scripts/calibrate_pose.py --image path/to/photo.jpg
     python backend/scripts/calibrate_pose.py --webcam
-
-InsightFace (buffalo_s / buffalo_l) Angle Conventions:
-- Yaw:
-    positive (+) -> person turned their head to their LEFT (viewer's right in mirrored preview)
-    negative (-) -> person turned their head to their RIGHT (viewer's left in mirrored preview)
-- Pitch:
-    positive (+) -> person tilted their head UPWARD (chin up)
-    negative (-) -> person tilted their head DOWNWARD (chin down)
-- Roll:
-    in-plane rotation around line of sight.
-
-This script verifies how angles are reported for your setup.
 """
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
+
 import numpy as np
 
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND_DIR))
 
-def calibrate_image(image_path: str):
-    import cv2
-    import insightface
+from app.services.pose_service import compute_pose_ratios  # noqa: E402
+
+
+def build_face_analyser():
     from insightface.app import FaceAnalysis
 
-    img = cv2.imread(image_path)
-    if img is None:
-        print(f"Error: Could not read image at {image_path}")
-        return
+    face_app = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
+    face_app.prepare(ctx_id=0, det_size=(640, 640))
+    return face_app
 
-    fa = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
-    fa.prepare(ctx_id=0, det_size=(640, 640))
-    faces = fa.get(img)
 
+def report_faces(path: Path, image, face_app) -> None:
+    faces = face_app.get(image)
     if not faces:
-        print("No faces detected in image.")
+        print(f"{path}: no face detected")
         return
 
-    for idx, face in enumerate(faces):
-        pitch, yaw, roll = face.pose
-        print(f"\nFace #{idx + 1}:")
-        print(f"  Detection Score: {face.det_score:.3f}")
-        print(f"  Yaw:             {yaw:+.2f}° (InsightFace: positive = person's left)")
-        print(f"  Pitch:           {pitch:+.2f}° (InsightFace: positive = chin up)")
-        print(f"  Roll:            {roll:+.2f}° (in-plane tilt)")
+    for index, face in enumerate(faces, start=1):
+        try:
+            yaw_ratio, pitch_ratio = compute_pose_ratios(np.asarray(face.kps))
+            print(
+                f"{path} face {index}: det_score={float(face.det_score):.3f} "
+                f"yaw_ratio={yaw_ratio:+.4f} pitch_ratio={pitch_ratio:+.4f}"
+            )
+        except (AttributeError, TypeError, ValueError, IndexError) as exc:
+            print(f"{path} face {index}: keypoint ratios unavailable ({exc})")
 
 
-def calibrate_webcam():
+def calibrate_image(image_path: Path, face_app) -> None:
     import cv2
-    import insightface
-    from insightface.app import FaceAnalysis
 
-    print("Opening webcam... Press 'q' to quit, 's' to snapshot & analyze.")
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: Could not open webcam.")
+    image = cv2.imread(str(image_path))
+    if image is None:
+        print(f"{image_path}: could not read image")
         return
+    report_faces(image_path, image, face_app)
 
-    fa = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
-    fa.prepare(ctx_id=0, det_size=(640, 640))
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+def calibrate_folder(folder: Path, face_app) -> None:
+    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    image_paths = sorted(
+        path for path in folder.rglob("*")
+        if path.is_file() and path.suffix.lower() in image_extensions
+    )
+    if not image_paths:
+        raise ValueError(f"No supported photos found in folder: {folder}")
+    for image_path in image_paths:
+        calibrate_image(image_path, face_app)
 
-        cv2.imshow("Webcam Calibration (Press 's' to analyze, 'q' to quit)", frame)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('s'):
-            faces = fa.get(frame)
-            if not faces:
-                print("No face detected.")
-            else:
-                for idx, face in enumerate(faces):
-                    pitch, yaw, roll = face.pose
-                    print(f"Detected: Score={face.det_score:.2f} | Yaw={yaw:+.1f}° | Pitch={pitch:+.1f}° | Roll={roll:+.1f}°")
 
-    cap.release()
-    cv2.destroyAllWindows()
+def calibrate_webcam(face_app) -> None:
+    import cv2
+
+    print("Opening webcam... Press 's' to analyze a frame, 'q' to quit.")
+    camera = cv2.VideoCapture(0)
+    if not camera.isOpened():
+        raise RuntimeError("Could not open webcam.")
+    try:
+        while True:
+            success, frame = camera.read()
+            if not success:
+                break
+            cv2.imshow("Pose Ratio Calibration", frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            if key == ord("s"):
+                report_faces(Path("webcam"), frame, face_app)
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calibrate InsightFace pose angles.")
-    parser.add_argument("--image", type=str, help="Path to image file to analyze")
-    parser.add_argument("--webcam", action="store_true", help="Launch interactive webcam test")
+    parser = argparse.ArgumentParser(description="Calibrate facial keypoint pose ratios.")
+    parser.add_argument("--image", type=Path, help="Analyze one image")
+    parser.add_argument("--folder", type=Path, help="Analyze all supported images recursively")
+    parser.add_argument("--webcam", action="store_true", help="Run interactive webcam calibration")
     args = parser.parse_args()
 
-    if args.image:
-        calibrate_image(args.image)
-    elif args.webcam:
-        calibrate_webcam()
-    else:
-        parser.print_help()
+    if sum(bool(value) for value in (args.image, args.folder, args.webcam)) != 1:
+        parser.error("Choose exactly one of --image, --folder, or --webcam.")
 
+    face_analyser = build_face_analyser()
+    if args.image:
+        calibrate_image(args.image, face_analyser)
+    elif args.folder:
+        if not args.folder.is_dir():
+            parser.error(f"Not a folder: {args.folder}")
+        calibrate_folder(args.folder, face_analyser)
+    else:
+        calibrate_webcam(face_analyser)

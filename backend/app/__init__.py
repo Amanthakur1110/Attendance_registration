@@ -56,8 +56,9 @@ def create_app(config: type[Config] | None = None) -> Flask:
     # ── Database + tables ──────────────────────────────────────────────────
     with app.app_context():
         _configure_sqlite(app)
-        from .models import user, otp, photo  # noqa: F401  (register models)
+        from .models import user, otp, photo, pose_attempt  # noqa: F401  (register models)
         db.create_all()
+        _migrate_photo_pose_columns(app)
 
     # ── Face service warm-up (loads model once) ────────────────────────────
     with app.app_context():
@@ -161,6 +162,27 @@ def create_app(config: type[Config] | None = None) -> Flask:
     return app
 
 
+def _migrate_photo_pose_columns(app) -> None:
+    """Add pose-ratio fields to databases created before ratio-based validation."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(db.engine)
+    if "photos" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("photos")}
+    additions = {
+        "yaw_ratio": "FLOAT",
+        "pitch_ratio": "FLOAT",
+        "pose_verified": "BOOLEAN NOT NULL DEFAULT 1",
+    }
+    with db.engine.begin() as connection:
+        for column_name, column_type in additions.items():
+            if column_name not in columns:
+                connection.execute(
+                    text(f"ALTER TABLE photos ADD COLUMN {column_name} {column_type}")
+                )
+
+
 def _configure_sqlite(app: Flask) -> None:
     """Enable WAL mode and foreign keys for every SQLite connection."""
     from sqlalchemy import event, text
@@ -195,4 +217,3 @@ def _configure_logging(app: Flask) -> None:
     app.logger.addHandler(stream_handler)
     app.logger.setLevel(logging.DEBUG)
     app.logger.propagate = False
-

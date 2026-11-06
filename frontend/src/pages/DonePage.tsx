@@ -30,13 +30,12 @@ export default function DonePage() {
         className="profile-main"
         style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}
       >
-        {/* Big green check */}
         <div className="done-check" aria-hidden="true">
           <svg viewBox="0 0 80 80" width="100" height="100">
-            <circle cx="40" cy="40" r="38" fill="rgba(52,199,89,0.15)" stroke="#34c759" strokeWidth="2" />
+            <circle cx="40" cy="40" r="38" fill="none" stroke="currentColor" strokeWidth="2" />
             <polyline
               points="22,40 34,54 58,28"
-              stroke="#34c759"
+              stroke="currentColor"
               strokeWidth="5"
               fill="none"
               strokeLinecap="round"
@@ -45,7 +44,8 @@ export default function DonePage() {
           </svg>
         </div>
 
-        <h1 className="profile-title" style={{ marginTop: 20 }}>Registration Complete!</h1>
+        <p className="profile-campus">IIIT Kurnool</p>
+        <h1 className="profile-title" style={{ marginTop: 10 }}>Registration complete</h1>
 
         {userInfo && (
           <div className="done-info">
@@ -69,7 +69,7 @@ export default function DonePage() {
         )}
 
         <p className="profile-subtitle" style={{ marginTop: 16, maxWidth: 300 }}>
-          All 4 photos submitted successfully. Your details have been saved.
+          Your photos and details have been saved.
         </p>
 
         <button
@@ -78,7 +78,7 @@ export default function DonePage() {
           onClick={handleLogout}
           style={{ marginTop: 32 }}
         >
-          Close &amp; Log Out
+          Done
         </button>
       </main>
     </div>

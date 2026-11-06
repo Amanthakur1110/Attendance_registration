@@ -6,8 +6,8 @@ import { ApiError } from '../api/client';
 import { Alert } from '../components/Alert';
 import { CameraView, CameraViewHandle } from '../components/CameraView';
 import { useFaceLandmarker } from '../hooks/useFaceLandmarker';
-import { POSES } from '../config/poses';
-import type { PoseConfig } from '../types';
+import { checkPose, POSES } from '../config/poses';
+import type { PoseConfig, PoseThresholds } from '../types';
 
 type CaptureState = 'idle' | 'holding' | 'uploading' | 'accepted';
 
@@ -48,31 +48,46 @@ function getGuidance(
   facesDetected: number,
   faceRect: { x: number; y: number; w: number; h: number } | null,
   videoWidth: number,
-  landmarkerStatus: string
-): { text: string; isGood: boolean } {
+  landmarkerStatus: string,
+  pose: PoseConfig,
+  yawRatio: number,
+  pitchRatio: number,
+  frontPitchRatio: number | null,
+  thresholds: PoseThresholds | null
+): { text: string; isGood: boolean; faceReady: boolean } {
   if (landmarkerStatus === 'loading') {
-    return { text: 'Starting facial scanner…', isGood: false };
+    return { text: 'Starting facial scanner…', isGood: false, faceReady: false };
+  }
+  if (!thresholds) {
+    return { text: 'Loading pose settings…', isGood: false, faceReady: false };
   }
 
   if (facesDetected === 0) {
-    return { text: 'Position your face in the circle', isGood: false };
+    return { text: 'Position your face in the circle', isGood: false, faceReady: false };
   }
 
   if (facesDetected > 1) {
-    return { text: 'Only 1 person in frame please', isGood: false };
+    return { text: 'Only 1 person in frame please', isGood: false, faceReady: false };
   }
 
   if (faceRect && videoWidth > 0) {
     const faceW = faceRect.w;
     if (faceW / videoWidth < 0.16) {
-      return { text: 'Move a little closer', isGood: false };
+      return { text: 'Move a little closer', isGood: false, faceReady: false };
     }
     if (faceW / videoWidth > 0.85) {
-      return { text: 'Move back a little', isGood: false };
+      return { text: 'Move back a little', isGood: false, faceReady: false };
     }
   }
 
-  return { text: 'Face found — hold still for automatic capture', isGood: true };
+  const poseError = checkPose(pose, yawRatio, pitchRatio, frontPitchRatio, thresholds);
+  if (poseError) return { text: poseError, isGood: false, faceReady: true };
+
+  return {
+    text: 'Face found — hold still for automatic capture',
+    isGood: true,
+    faceReady: true,
+  };
 }
 
 export default function CapturePage() {
@@ -90,6 +105,10 @@ export default function CapturePage() {
   const [shutterFlash, setShutterFlash] = useState(false);
   const [holdProgress, setHoldProgress] = useState(0);
   const [showSkeleton, setShowSkeleton] = useState(true);
+  const [frontPitchRatio, setFrontPitchRatio] = useState<number | null>(null);
+  const [poseAttempts, setPoseAttempts] = useState(0);
+  const [debugPoseEnabled, setDebugPoseEnabled] = useState(false);
+  const [poseThresholds, setPoseThresholds] = useState<PoseThresholds | null>(null);
 
   const currentPose: PoseConfig = POSES[currentPoseIndex] ?? POSES[0];
   const holdStartTimeRef = useRef<number | null>(null);
@@ -115,6 +134,10 @@ export default function CapturePage() {
       .then((status) => {
         if (cancelled) return;
         setAcceptedPoses(status.accepted_poses);
+        setFrontPitchRatio(status.front_pitch_ratio);
+        setPoseAttempts(status.pose_attempts);
+        setPoseThresholds(status.pose_thresholds);
+        setDebugPoseEnabled(status.debug_pose);
         setPoseStatusReady(true);
         if (status.completed) {
           navigate('/done', { replace: true });
@@ -142,15 +165,20 @@ export default function CapturePage() {
     cameraReady && poseStatusReady && (captureState === 'idle' || captureState === 'holding')
   );
   const videoWidth = videoRef.current?.videoWidth ?? 640;
-  const { text: guidanceText, isGood } = getGuidance(
+  const { text: guidanceText, isGood, faceReady } = getGuidance(
     landmarkerResult.facesDetected,
     landmarkerResult.faceRect,
     videoWidth,
-    landmarkerStatus
+    landmarkerStatus,
+    currentPose,
+    landmarkerResult.yawRatio,
+    landmarkerResult.pitchRatio,
+    frontPitchRatio,
+    poseThresholds
   );
 
   // Trigger snapshot upload
-  const doCapture = useCallback(async () => {
+  const doCapture = useCallback(async (submitAnyway = false) => {
     if (isCapturingRef.current) return;
     isCapturingRef.current = true;
     setCaptureState('uploading');
@@ -163,11 +191,15 @@ export default function CapturePage() {
 
     try {
       const blob = await cameraRef.current!.captureFrame();
-      const result = await photosApi.upload(blob, currentPose.name);
+      const result = await photosApi.upload(blob, currentPose.name, submitAnyway);
 
       setAcceptedPoses((prev) =>
         prev.includes(currentPose.name) ? prev : [...prev, currentPose.name]
       );
+      if (currentPose.name === 'PHOTO_1') {
+        setFrontPitchRatio(landmarkerResult.pitchRatio);
+      }
+      setPoseAttempts(0);
       setCaptureState('accepted');
       setHoldProgress(1.0);
 
@@ -190,16 +222,20 @@ export default function CapturePage() {
       setCaptureState('idle');
       setHoldProgress(0);
       if (err instanceof ApiError) {
-        setServerFeedback(
-          `${err.message} Adjust your face angle slightly; capture will retry automatically.`
-        );
+        if (err.code === 'WRONG_POSE') {
+          const attempts = err.data.pose_attempts;
+          if (typeof attempts === 'number') setPoseAttempts(attempts);
+          setServerFeedback(err.message);
+        } else {
+          setServerFeedback(err.message);
+        }
       } else {
         setServerFeedback(
           'Photo verification failed. Adjust your position; capture will retry automatically.'
         );
       }
     }
-  }, [currentPose.name, navigate]);
+  }, [currentPose.name, landmarkerResult.pitchRatio, navigate]);
 
   // Smooth Apple Face ID auto-capture progress: holds for 600ms when face is in circle
   useEffect(() => {
@@ -210,10 +246,17 @@ export default function CapturePage() {
     const HOLD_DURATION_MS = 800;
 
     const updateHoldProgress = () => {
-      if (!isGood) {
+      if (!faceReady) {
         holdStartTimeRef.current = null;
         setHoldProgress(0);
         if (captureState === 'holding') setCaptureState('idle');
+        animFrameRef.current = requestAnimationFrame(updateHoldProgress);
+        return;
+      }
+
+      if (!isGood && poseAttempts >= 3) {
+        holdStartTimeRef.current = null;
+        setHoldProgress(0);
         animFrameRef.current = requestAnimationFrame(updateHoldProgress);
         return;
       }
@@ -249,9 +292,11 @@ export default function CapturePage() {
     };
   }, [
     isGood,
+    faceReady,
     landmarkerResult.facesDetected,
-    landmarkerResult.pitch,
-    landmarkerResult.yaw,
+    landmarkerResult.pitchRatio,
+    landmarkerResult.yawRatio,
+    poseAttempts,
     captureState,
     doCapture,
   ]);
@@ -279,9 +324,9 @@ export default function CapturePage() {
 
       {/* Main Scanner Container */}
       <main className="faceid-main">
-        {currentPoseIndex >= 2 && (
+        {currentPoseIndex >= 1 && currentPoseIndex <= 2 && (
           <div className="faceid-angle-prompt" aria-live="polite">
-            {currentPoseIndex === 2 ? 'Turn left' : 'Turn right'}
+            {currentPoseIndex === 1 ? 'Turn left' : 'Turn right'}
           </div>
         )}
         {cameraError ? (
@@ -330,6 +375,11 @@ export default function CapturePage() {
           <p className={`faceid-subtitle ${isGood ? 'faceid-subtitle--good' : ''}`}>
             {guidanceText}
           </p>
+          {debugPoseEnabled && poseThresholds && landmarkerResult.facesDetected > 0 && (
+            <p className="faceid-debug-pose">
+              yaw_ratio: {(landmarkerResult.yawRatio * poseThresholds.yaw_sign).toFixed(3)}
+            </p>
+          )}
         </div>
 
         {/* Server rejection feedback if any */}
@@ -337,6 +387,16 @@ export default function CapturePage() {
           <div className="faceid-alert-wrap">
             <Alert type="error" message={serverFeedback} />
           </div>
+        )}
+        {poseAttempts >= 3 && (
+          <button
+            type="button"
+            className="faceid-submit-anyway"
+            onClick={() => void doCapture(true)}
+            disabled={captureState === 'uploading' || captureState === 'accepted'}
+          >
+            Submit anyway
+          </button>
         )}
 
         {/* Capture is automatic; retain only the optional overlay control. */}

@@ -1,6 +1,6 @@
 /**
  * useFaceLandmarker — loads MediaPipe FaceLandmarker and runs real-time inference.
- * Provides 3D landmark points for the face skeleton overlay and calibrated head pose angles.
+ * Provides face mesh points and keypoint ratios for the pose checks.
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { FaceLandmarkResult } from '../types';
@@ -13,74 +13,25 @@ interface Point3D {
   z: number;
 }
 
-// Compute accurate yaw, pitch, roll using 3D landmark geometry and transformation matrix.
-function computeHeadPose(
-  matrix: number[] | undefined,
-  landmarks: Point3D[]
-): { yaw: number; pitch: number; roll: number } {
-  const nose = landmarks[1] || landmarks[4];
-  const rightCheek = landmarks[234];
-  const leftCheek = landmarks[454];
-  const forehead = landmarks[10];
-  const chin = landmarks[152];
-  const rightEye = landmarks[33];
-  const leftEye = landmarks[263];
+function computePoseRatios(landmarks: Point3D[]): { yawRatio: number; pitchRatio: number } {
+  const nose = landmarks[1];
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  const leftMouth = landmarks[61];
+  const rightMouth = landmarks[291];
+  const eyeMidX = (leftEye.x + rightEye.x) / 2;
+  const eyeMidY = (leftEye.y + rightEye.y) / 2;
+  const interEyeDistance = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+  const mouthMidY = (leftMouth.y + rightMouth.y) / 2;
+  const verticalEyeMouthDistance = mouthMidY - eyeMidY;
 
-  let geomYaw = 0;
-  let geomPitch = 0;
-  let geomRoll = 0;
-
-  if (nose && rightCheek && leftCheek) {
-    const faceWidth = Math.max(0.001, leftCheek.x - rightCheek.x);
-    const midX = (rightCheek.x + leftCheek.x) / 2;
-    // When a person turns to their LEFT:
-    // Nose shifts toward their left cheek (landmark 454, larger X in raw frame).
-    // Asymmetry is positive.
-    const asymmetry = (nose.x - midX) / (faceWidth * 0.5);
-    const depthYaw = (leftCheek.z - rightCheek.z) / faceWidth;
-    geomYaw = (asymmetry * 48) + (depthYaw * 32);
+  if (interEyeDistance < 1e-6 || Math.abs(verticalEyeMouthDistance) < 1e-6) {
+    return { yawRatio: 0, pitchRatio: 0 };
   }
-
-  if (forehead && chin && nose) {
-    const faceHeight = Math.max(0.001, chin.y - forehead.y);
-    // Depth slope: when chin is tilted UP, chin is closer to camera (smaller Z) than forehead.
-    const dz = (forehead.z - chin.z) / faceHeight;
-    const noseRatio = (nose.y - forehead.y) / faceHeight;
-    geomPitch = (dz * 75) + ((noseRatio - 0.60) * 45);
-  }
-
-  if (rightEye && leftEye) {
-    geomRoll = Math.atan2(leftEye.y - rightEye.y, leftEye.x - rightEye.x) * (180 / Math.PI);
-  }
-
-  // If MediaPipe 4x4 transform matrix is available, compute matrix Euler angles
-  let matYaw = geomYaw;
-  let matPitch = geomPitch;
-  let matRoll = geomRoll;
-
-  if (matrix && matrix.length >= 16) {
-    const r00 = matrix[0];
-    const r10 = matrix[1];
-    const r20 = matrix[2];
-    const r21 = matrix[6];
-    const r22 = matrix[10];
-    const rad2deg = 180 / Math.PI;
-
-    const mYaw = Math.asin(Math.max(-1, Math.min(1, -r20))) * rad2deg;
-    const mPitch = Math.atan2(r21, r22) * rad2deg;
-    const mRoll = Math.atan2(r10, r00) * rad2deg;
-
-    matYaw = mYaw;
-    matPitch = mPitch;
-    matRoll = mRoll;
-  }
-
-  // Blend matrix and landmark geometry for maximum robustness
-  const yaw = Number.isFinite(matYaw) ? (geomYaw * 0.55 + matYaw * 0.45) : geomYaw;
-  const pitch = Number.isFinite(matPitch) ? (geomPitch * 0.55 + matPitch * 0.45) : geomPitch;
-  const roll = Number.isFinite(matRoll) ? (geomRoll * 0.55 + matRoll * 0.45) : geomRoll;
-
-  return { yaw, pitch, roll };
+  return {
+    yawRatio: (nose.x - eyeMidX) / interEyeDistance,
+    pitchRatio: (nose.y - eyeMidY) / verticalEyeMouthDistance,
+  };
 }
 
 export function useFaceLandmarker(
@@ -90,16 +41,14 @@ export function useFaceLandmarker(
   const [status, setStatus] = useState<LandmarkerState>('loading');
   const [result, setResult] = useState<FaceLandmarkResult>({
     facesDetected: 0,
-    yaw: 0,
-    pitch: 0,
-    roll: 0,
+    yawRatio: 0,
+    pitchRatio: 0,
     faceRect: null,
     landmarks: undefined,
   });
   const landmarkerRef = useRef<unknown>(null);
   const rafRef = useRef<number>(0);
   const lastVideoTime = useRef<number>(-1);
-  const smoothedAnglesRef = useRef<{ yaw: number; pitch: number; roll: number } | null>(null);
   const lastStateUpdateTime = useRef<number>(0);
   const lastFacesCount = useRef<number>(-1);
 
@@ -129,7 +78,7 @@ export function useFaceLandmarker(
               modelAssetPath: '/mediapipe/face_landmarker.task',
             },
             outputFaceBlendshapes: false,
-            outputFacialTransformationMatrixes: true,
+            outputFacialTransformationMatrixes: false,
             runningMode: 'VIDEO',
             numFaces: 1,
             minFaceDetectionConfidence: 0.35,
@@ -143,7 +92,7 @@ export function useFaceLandmarker(
                 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
             },
             outputFaceBlendshapes: false,
-            outputFacialTransformationMatrixes: true,
+            outputFacialTransformationMatrixes: false,
             runningMode: 'VIDEO',
             numFaces: 1,
             minFaceDetectionConfidence: 0.35,
@@ -173,7 +122,6 @@ export function useFaceLandmarker(
     const landmarker = landmarkerRef.current as {
       detectForVideo: (v: HTMLVideoElement, t: number) => {
         faceLandmarks: Point3D[][];
-        facialTransformationMatrixes?: { data: number[] }[];
       };
     } | null;
 
@@ -197,34 +145,20 @@ export function useFaceLandmarker(
         count !== lastFacesCount.current || now - lastStateUpdateTime.current >= 45;
 
       if (count === 0) {
-        smoothedAnglesRef.current = null;
         if (shouldUpdate) {
           lastStateUpdateTime.current = now;
           lastFacesCount.current = 0;
           setResult({
             facesDetected: 0,
-            yaw: 0,
-            pitch: 0,
-            roll: 0,
+            yawRatio: 0,
+            pitchRatio: 0,
             faceRect: null,
             landmarks: undefined,
           });
         }
       } else {
         const rawLandmarks = detections.faceLandmarks[0];
-        const matrixData = detections.facialTransformationMatrixes?.[0]?.data;
-        const angles = computeHeadPose(matrixData ? Array.from(matrixData) : undefined, rawLandmarks);
-
-        let { yaw, pitch, roll } = angles;
-
-        const previous = smoothedAnglesRef.current;
-        if (previous) {
-          const smoothing = 0.40;
-          yaw = previous.yaw + smoothing * (yaw - previous.yaw);
-          pitch = previous.pitch + smoothing * (pitch - previous.pitch);
-          roll = previous.roll + smoothing * (roll - previous.roll);
-        }
-        smoothedAnglesRef.current = { yaw, pitch, roll };
+        const ratios = computePoseRatios(rawLandmarks);
 
         if (shouldUpdate) {
           lastStateUpdateTime.current = now;
@@ -241,9 +175,8 @@ export function useFaceLandmarker(
 
           setResult({
             facesDetected: count,
-            yaw,
-            pitch,
-            roll,
+            yawRatio: ratios.yawRatio,
+            pitchRatio: ratios.pitchRatio,
             faceRect: {
               x: minX * video.videoWidth,
               y: minY * video.videoHeight,

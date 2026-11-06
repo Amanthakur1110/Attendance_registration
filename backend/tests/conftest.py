@@ -17,7 +17,7 @@ os.environ.setdefault("GMAIL_USER", "test@gmail.com")
 os.environ.setdefault("GMAIL_APP_PASSWORD", "testpassword")
 os.environ.setdefault("EMAIL_DOMAIN", "iiitk.ac.in")
 os.environ.setdefault("OTP_EXPIRY_MINUTES", "5")
-os.environ.setdefault("MAX_OTP_ATTEMPTS", "5")
+os.environ.setdefault("MAX_OTP_ATTEMPTS", "8")
 os.environ.setdefault("OTP_COOLDOWN_SECONDS", "60")
 os.environ.setdefault("FACE_CONFIDENCE_THRESHOLD", "0.70")
 os.environ.setdefault("SAME_PERSON_THRESHOLD", "0.35")
@@ -47,6 +47,7 @@ def app():
         Config.SECRET_KEY = "test-secret-key-long-enough"
         Config.PHOTOS_DIR = os.path.join(tempfile.gettempdir(), "test_photos")
         Config.TESTING = True
+        Config.RATELIMIT_ENABLED = False
 
         application = create_app(Config)
         application.config["TESTING"] = True
@@ -68,4 +69,3 @@ def db_session(app):
         yield _db.session
         _db.session.remove()
         _db.drop_all()
-

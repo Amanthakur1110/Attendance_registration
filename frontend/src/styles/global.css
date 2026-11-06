@@ -772,6 +772,28 @@ body {
   text-shadow: 0 0 10px rgba(182, 243, 106, 0.35);
 }
 
+.faceid-debug-pose {
+  color: rgba(255, 255, 255, 0.62);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.faceid-submit-anyway {
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid rgba(182, 243, 106, 0.7);
+  border-radius: 999px;
+  background: rgba(182, 243, 106, 0.12);
+  color: #d3ff9f;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.faceid-submit-anyway:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .faceid-alert-wrap {
   width: 100%;
   max-width: 360px;
@@ -881,27 +903,83 @@ body {
 
 /* ── Shared mobile-first account screens ────────────────────────────────── */
 .profile-page {
+  min-height: 100svh;
+  min-height: 100dvh;
   justify-content: center;
-  gap: 20px;
-  padding: 28px 18px calc(28px + env(safe-area-inset-bottom));
+  gap: clamp(14px, 3vh, 22px);
+  padding: max(16px, env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
+  overflow-x: hidden;
   background:
     radial-gradient(ellipse at 50% 0%, rgba(108, 157, 65, 0.13), transparent 50%),
     #050806;
 }
 
-.profile-page .faceid-header {
-  max-width: 440px;
-  margin-top: 0;
+.login-page {
+  gap: clamp(24px, 5vh, 36px);
+}
+
+.login-page .faceid-header {
   gap: 10px;
 }
 
+.login-header .profile-title {
+  max-width: 360px;
+  font-size: clamp(22px, 5.5vw, 26px);
+  letter-spacing: -0.015em;
+}
+
+.login-card {
+  max-width: 420px;
+}
+
+.login-card .profile-form {
+  gap: 18px;
+}
+
+.login-card .profile-footer-note {
+  max-width: 270px;
+  margin: 18px auto 0;
+}
+
+.otp-page {
+  gap: clamp(12px, 2.5vh, 20px);
+}
+
+.otp-page .profile-logo {
+  width: 56px;
+  height: 56px;
+}
+
+.otp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.otp-form .profile-error,
+.otp-form .profile-success {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.otp-form .profile-submit-btn {
+  margin-top: 2px;
+}
+
+.profile-page .faceid-header {
+  max-width: 440px;
+  margin-top: 0;
+  gap: 8px;
+}
+
 .profile-logo {
-  width: 76px;
-  height: 76px;
+  width: 64px;
+  height: 64px;
   display: grid;
   place-items: center;
   border: 1px solid rgba(182, 243, 106, 0.25);
-  border-radius: 24px;
+  border-radius: 20px;
   background: rgba(182, 243, 106, 0.08);
   box-shadow: 0 0 34px rgba(111, 161, 67, 0.12);
 }
@@ -909,15 +987,28 @@ body {
 .profile-logo svg {
   max-width: 100%;
   max-height: 100%;
+  color: #f2f7f1;
+}
+
+.profile-campus {
+  color: #b6f36a;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .profile-title {
-  color: #f2f7f1;
+  color: #fff;
   font-size: clamp(24px, 6vw, 30px);
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.025em;
   text-align: center;
+}
+
+.profile-main .profile-title {
+  color: #f2f7f1;
 }
 
 .profile-subtitle {
@@ -941,6 +1032,7 @@ body {
   border: 1px solid rgba(182, 243, 106, 0.16);
   border-radius: 22px;
   background: rgba(14, 19, 16, 0.92);
+  color: #edf5ee;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
 }
 
@@ -1098,16 +1190,18 @@ body {
 }
 
 .otp-boxes {
-  display: flex;
-  justify-content: space-between;
-  gap: clamp(5px, 2vw, 10px);
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: clamp(4px, 1.8vw, 8px);
+  width: 100%;
 }
 
 .otp-box {
-  width: min(52px, 14vw);
+  width: 100%;
+  min-width: 0;
   height: 56px;
   border: 1px solid #334239;
-  border-radius: 12px;
+  border-radius: 10px;
   outline: none;
   background: #090e0b;
   color: #f2f7f1;
@@ -1172,9 +1266,14 @@ body {
   color: #aab8ad;
 }
 
+.otp-email {
+  color: #b6f36a;
+  overflow-wrap: anywhere;
+}
+
 .done-check {
   margin-bottom: 4px;
-  filter: drop-shadow(0 0 18px rgba(115, 230, 151, 0.16));
+  color: #edf5ee;
 }
 
 .done-info {
@@ -1213,19 +1312,43 @@ body {
 @media (max-width: 380px) {
   .profile-page {
     gap: 16px;
-    padding-right: 14px;
-    padding-left: 14px;
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
-  .profile-logo {
-    width: 66px;
-    height: 66px;
+  .profile-main {
+    padding: 18px;
   }
 
   .otp-box {
-    height: 50px;
-    border-radius: 10px;
+    height: 48px;
+    border-radius: 8px;
     font-size: 20px;
+  }
+}
+
+@media (max-height: 680px) {
+  .profile-page {
+    justify-content: flex-start;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .login-page {
+    gap: 18px;
+  }
+
+  .otp-page {
+    gap: 10px;
+  }
+
+  .otp-page .profile-main {
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .otp-page .otp-box {
+    height: 48px;
   }
 }
 

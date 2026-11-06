@@ -5,8 +5,8 @@ A robust, production-grade face-photo enrollment system for students with **Flas
 The user flow mimics **Google / Apple Face ID enrollment**:
 1. **Roll Number** input (e.g. `524cs0019`)
 2. **Email OTP** verification (`<roll>@iiitk.ac.in` via Gmail SMTP_SSL; delivery runs in a background worker so the request responds immediately)
-3. **Live-guided multi-pose face capture** (Front, Front, Left, Right) with automatic capture and backend-verified pose checks
-4. **Instant authoritative backend validation** (face detection, bounds check, blur check, head pose angles, duplicate SHA-256 check, and same-person embedding cosine similarity)
+3. **Live-guided multi-pose face capture** (Front, Left, Right, Up) with automatic capture and backend-verified keypoint-ratio checks
+4. **Instant authoritative backend validation** (face detection, bounds check, blur check, keypoint ratios, duplicate SHA-256 check, and same-person embedding cosine similarity)
 5. **Session-safe completion & resume support**
 
 ---
@@ -65,7 +65,7 @@ face-registration/
 │   │       └── responses.py  # Standardized json_ok / json_error responses
 │   ├── scripts/
 │   │   ├── download_models.py # Pre-downloads buffalo_s / buffalo_l models
-│   │   └── calibrate_pose.py  # Diagnostic tool for yaw/pitch angles
+│   │   └── calibrate_pose.py  # Diagnostic tool for facial keypoint ratios
 │   ├── tests/                # Comprehensive pytest suite
 │   ├── instance/             # SQLite app.db and app.log
 │   └── photos/               # Saved photos: photos/<roll>/<roll>_<n>_<pose>.jpg
@@ -207,35 +207,34 @@ curl https://xxxx-xx-xx.ngrok-free.app/api/health
 
 ## Pose Calibration & Tuning
 
-Head pose angles are measured in degrees. The preview `<video>` is mirrored (CSS `transform: scaleX(-1)`) for natural selfie interaction, but the snapshot sent to the server is the **non-mirrored raw capture**.
+Pose is computed from facial keypoints, not InsightFace's `face.pose` angles:
 
-Angle coordinate system:
-- **Yaw**:
-  - `> 0`: Person turns head to their **LEFT**
-  - `< 0`: Person turns head to their **RIGHT**
-- **Pitch**:
-  - `> 0`: Person tilts head **UP** (chin raised)
-  - `< 0`: Person tilts head **DOWN** (chin lowered)
-- **Roll**:
-  - In-plane tilt (kept within $\pm 50^\circ$)
+- `yaw_ratio = (nose_x - eye_mid_x) / inter_eye_distance`
+- `pitch_ratio = (nose_y - eye_mid_y) / (mouth_mid_y - eye_mid_y)`
 
-### Pose Sequence Configuration
+All images uploaded by the browser are raw, non-mirrored camera frames. Positive yaw means the nose is shifted toward image-right and the person turns to their LEFT. `YAW_SIGN=-1` reverses the left/right convention in one place if a device needs calibration.
 
-The backend validates the requested sequence using InsightFace pose estimates: two front-facing photos, then two slightly different side views. Either side is accepted; the server does not depend on yaw sign, which can vary with camera mirroring. The camera auto-captures a visible face after a short hold and retries automatically after a brief pause if a photo is rejected.
+The capture sequence is **Front → Left → Right → Up**. Front accepts `|yaw_ratio| <= 0.15`; side photos require at least `0.18` in the requested direction and a face detection score of at least `0.70`; Up requires yaw within `0.25` and a pitch ratio at least `0.06` lower than that student's stored front-photo ratio. After three rejected pose attempts on a step, **Submit anyway** can bypass only the pose check. Face detection, side-photo confidence, image validation, and same-person checks still apply; such a photo is stored as `pose_verified=false` for manual review.
 
-| Pose # | Name | Direction | Yaw Range | Pitch Range | Prompt Text |
-| :---: | :---: | :---: | :---: | :---: | :--- |
-| **1** | `PHOTO_1` | Front-facing | $[-45^\circ, +45^\circ]$ | $[-45^\circ, +45^\circ]$ | *"Look straight at the camera"* |
-| **2** | `PHOTO_2` | Front-facing again | $[-45^\circ, +45^\circ]$ | $[-45^\circ, +45^\circ]$ | *"Look at the camera for one more front photo"* |
-| **3** | `PHOTO_3` | Side view, either direction | $[-90^\circ, +90^\circ]$, at least $8^\circ$ from front | $[-60^\circ, +60^\circ]$ | *"Turn your face slightly to either side"* |
-| **4** | `PHOTO_4` | A slightly different side view | At least $5^\circ$ different from the prior side view | $[-60^\circ, +60^\circ]$ | *"Change to a slightly different side view"* |
+Tune these values in `.env`:
 
-To test or calibrate camera angles for custom hardware:
+```env
+POSE_FRONT_YAW_MAX=0.15
+POSE_SIDE_YAW_MIN=0.18
+POSE_UP_PITCH_DELTA=0.06
+POSE_UP_YAW_MAX=0.25
+POSE_SIDE_FACE_CONFIDENCE=0.70
+YAW_SIGN=1
+DEBUG_POSE=false
+```
+
+Set `DEBUG_POSE=true` to include ratio values and thresholds in the upload response and show the live yaw ratio in the capture UI. To inspect a folder of calibration images:
 ```bash
-# Test an image
-python backend/scripts/calibrate_pose.py --image path/to/sample.jpg
+# Analyze all supported images recursively
+python backend/scripts/calibrate_pose.py --folder path/to/test-photos
 
-# Interactive webcam test
+# Analyze a single image or use a live webcam
+python backend/scripts/calibrate_pose.py --image path/to/sample.jpg
 python backend/scripts/calibrate_pose.py --webcam
 ```
 
@@ -250,10 +249,10 @@ When a photo is POSTed to `/api/photos/upload`:
 4. **Single Face Detection**:
    - 0 faces detected $\rightarrow$ `422 NO_FACE`
    - $>1$ faces detected $\rightarrow$ `422 MULTIPLE_FACES`
-   - Face confidence $< 0.70$ $\rightarrow$ rejected
+   - General face confidence follows `FACE_CONFIDENCE_THRESHOLD`; left/right steps additionally require `POSE_SIDE_FACE_CONFIDENCE` (default `0.70`)
 5. **Framing & Boundary**: Face width must exceed 15% of frame width and must be entirely inside frame boundaries.
 6. **Blurriness**: Variance of Laplacian on face crop must exceed 60.0.
-7. **Pose Angle Check**: Measured yaw, pitch, and roll are verified against configured ranges with specific directional guidance hints; repeated straight-on frames cannot pass a side-angle step.
+7. **Pose Ratio Check**: Eye, nose, and mouth keypoints produce normalized yaw/pitch ratios that are checked against `.env` thresholds with actionable direction guidance. The front pitch ratio is saved for the later Up check.
 8. **Anti-Duplicate Check**: SHA-256 hash must not match previously submitted photos for the student.
 9. **Same-Person Identity Verification**:
    - Photo 1 generates the identity embedding.
@@ -280,13 +279,14 @@ python -m pytest tests/ -v
   - Expired OTP rejected.
   - OTP is single-use only.
   - Completed students get `409 ALREADY_COMPLETED` without sending new OTP.
-- [x] **`test_pose.py`**: Verifies the two-front/left/right sequence, directional guidance, in-plane roll, and InsightFace coordinate conventions.
+- [x] **`test_pose.py`**: Verifies synthetic keypoint ratios, Front/Left/Right/Up acceptance, actionable guidance, configured yaw sign, and mirrored-image sign reversal.
 - [x] **`test_upload_flow.py`**:
   - Unauthenticated requests return `401`.
   - Out-of-order pose upload returns `409 WRONG_POSE_ORDER`.
   - No-face and multi-face images rejected with `422`.
   - Blurry images rejected with `422 BLURRY_IMAGE`.
-  - Non-matching pose angles rejected with `422 WRONG_POSE`.
+  - Non-matching keypoint ratios rejected with `422 WRONG_POSE`.
+  - Three pose rejections unlock a pose-only override; saved overrides are marked `pose_verified=false`.
   - Different person detected rejected with `422 DIFFERENT_PERSON`.
   - Full 4-step upload creates disk files and marks `user.completed = 1`.
   - Resume flow: Returning after 2 photos resumes directly at step 3.

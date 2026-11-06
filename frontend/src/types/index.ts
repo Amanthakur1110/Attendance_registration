@@ -32,15 +32,31 @@ export interface PhotoStatus {
   photo_count: number;
   completed: boolean;
   poses: PoseInfo[];
+  front_pitch_ratio: number | null;
+  pose_attempts: number;
+  pose_thresholds: PoseThresholds;
+  debug_pose: boolean;
+}
+
+export interface PoseThresholds {
+  front_yaw_max: number;
+  side_yaw_min: number;
+  up_pitch_delta: number;
+  up_yaw_max: number;
+  yaw_sign: 1 | -1;
+  side_face_confidence: number;
 }
 
 export interface PhotoUploadResult {
   photo_no: number;
   pose: string;
   confidence: number;
-  yaw: number;
-  pitch: number;
-  roll_angle: number;
+  pose_verified: boolean;
+  pose_debug?: {
+    yaw_ratio: number | null;
+    pitch_ratio: number | null;
+    thresholds: PoseThresholds;
+  };
 }
 
 export type PoseName =
@@ -57,11 +73,6 @@ export interface PoseConfig {
   name: PoseName;
   label: string;
   instruction: string;
-  yawMin: number;
-  yawMax: number;
-  pitchMin: number;
-  pitchMax: number;
-  rollMax: number;
 }
 
 export type LiveFeedback =
@@ -77,10 +88,8 @@ export type LiveFeedback =
 
 export interface FaceLandmarkResult {
   facesDetected: number;
-  yaw: number;
-  pitch: number;
-  roll: number;
+  yawRatio: number;
+  pitchRatio: number;
   faceRect: { x: number; y: number; w: number; h: number } | null;
   landmarks?: { x: number; y: number; z: number }[];
 }
-

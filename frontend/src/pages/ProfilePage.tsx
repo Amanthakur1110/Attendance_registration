@@ -70,10 +70,11 @@ export default function ProfilePage() {
       <header className="faceid-header" style={{ marginBottom: 0 }}>
         <div className="profile-logo" aria-hidden="true">
           <svg viewBox="0 0 60 60" width="56" height="56">
-            <circle cx="30" cy="22" r="14" fill="rgba(255,255,255,0.15)" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" />
-            <ellipse cx="30" cy="52" rx="20" ry="12" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" />
+            <circle cx="30" cy="22" r="14" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <ellipse cx="30" cy="52" rx="20" ry="12" fill="none" stroke="currentColor" strokeWidth="1.8" />
           </svg>
         </div>
+        <p className="profile-campus">IIIT Kurnool</p>
         <h1 className="profile-title">Your Details</h1>
         {roll && <p className="profile-roll">{roll}</p>}
       </header>
@@ -95,7 +96,7 @@ export default function ProfilePage() {
               className="profile-input"
               value={name}
               onChange={(e) => { setName(e.target.value); setError(''); }}
-              placeholder="e.g. Aman Thakur"
+              placeholder="Your full name"
               autoComplete="name"
               autoFocus
               disabled={loading}
@@ -138,7 +139,7 @@ export default function ProfilePage() {
             {loading ? (
               <span className="faceid-spinner" style={{ borderTopColor: '#000', borderColor: 'rgba(0,0,0,0.2)' }} />
             ) : (
-              'Continue to Camera →'
+              'Continue'
             )}
           </button>
         </form>
